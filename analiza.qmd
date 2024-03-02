@@ -1,0 +1,100 @@
+---
+title: "Analiza rynku mieszkaniowego w Lublinie (marzec 2023r.)"
+author: "Dominika Stępniewska"
+format: html
+editor: visual
+---
+
+```{r, warning = F, message = F}
+library(rvest)
+library(stringr)
+library(httr)
+library(readr)
+library(tibble)
+library(tidyverse)
+```
+
+```{r}
+url <- "https://www.otodom.pl/pl/wyniki/sprzedaz/mieszkanie/lubelskie/lublin/lublin/lublin?viewType=listing"
+page <- read_html(url, encoding = "UTF-8")
+
+pages_num <- page %>%
+  html_nodes("li.css-1tospdx") %>%
+  html_text()
+pages_num <- 5
+
+pages <- c()
+for (i in 1:pages_num){
+  pages[i] <- str_c(url,"&page=",i)
+}
+```
+
+```{r, warning = F, message = F}
+# web scraping
+
+title <- c()
+location <- c()
+price <- c()
+info <- c()
+offer <- c()
+i <- 0 
+
+for (i in 1:length(pages)){
+  current_url <- pages[i]
+  current_page <- read_html(pages[i])
+  response <- GET(current_url)
+  
+  if(http_error(response)) {
+    warning("HTTP error: ", status_code(response))
+  } else {
+    content <- content(response)
+  }
+  
+  title <- append(title, current_page %>% html_nodes(".e14ondvl0") %>% html_text())
+  location <- append(location, current_page %>% html_nodes(".e1w8teyi1") %>% html_text())
+  price <- append(price, current_page %>% html_nodes(".e1w8teyi0") %>% html_text())
+  info <- append(info, current_page %>% html_nodes(".e1w8teyi2") %>% html_text())
+  offer <- append(offer, current_page %>% html_nodes(".e1r80qxr0") %>% html_text())
+}
+```
+
+```{r}
+# data cleaning
+
+data <- tibble(title, location, price, info, offer)
+
+data$location <- data$location %>% str_replace_all("\\.css-.*?\\}", "")
+
+data$price <- data$price %>% str_replace_all("\\.css-.*?\\}", "") %>% str_replace_all("@media.*?$","") %>% str_extract("\\d+(\\s+\\d{3})*(,\\d+)?\\s+") %>% str_replace_all(',','.')
+data$price <- gsub("[^ -~]+", "", data$price)
+data$price <- data$price %>% parse_number() %>% round(digits = 0)
+
+data$rooms <- data$info %>% str_extract("(?<=Liczba pokoi)\\d+")
+
+data$area <- data$info %>% str_extract("(?<=Powierzchnia)\\d+(\\.\\d+)?") %>% parse_number()
+
+data <- data %>% mutate(square_meter_price <- round(data$price/data$area, digits = 0))
+colnames(data)[colnames(data) == "square_meter_price <- round(data$price/data$area, digits = 0)"] <- "square_meter_price"
+
+data <- data %>%
+  mutate(floor = if_else(str_detect(data$info, "parter"), 0, NA))
+data$floor[is.na(data$floor)] <- str_extract(data$info[is.na(data$floor)], "Piętro(\\d+) piętro")
+data$floor <- data$floor %>% parse_number()
+
+data$offer <- data$offer %>% str_replace_all("\\.css-.*?\\}", "") %>% str_replace_all("@media.*?$","")
+```
+
+```{r}
+# extract neighborhoods
+
+neighborhoods <- c("Abramowice", "Bronowice", "Czechów Północny", "Czechów Południowy", "Czuby Południowe", "Czuby Północne", "Dziesiąta", "Felin", "Głusk", "Hajdów-Zadębie", "Kalinowszczyzna", "Konstantynów", "Kośminek", "Ponikwoda", "Rury", "Sławin", "Sławinek", "Stare Miasto", "Szerokie", "Śródmieście", "Tatary", "Węglin Południowy", "Węglin Północny", "Wieniawa", "Wrotków", "Za Cukrownią", "Zemborzyce")
+
+data <- data %>%
+  mutate(neighborhood = str_extract(location, paste(neighborhoods, collapse = "|")))
+
+data$neighborhood <- as.factor(data$neighborhood)
+```
+
+```{r}
+dataset <- data %>% select(area, price, square_meter_price, neighborhood, floor)
+```
